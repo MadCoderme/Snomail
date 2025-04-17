@@ -80,7 +80,7 @@ const scheduledJobs = new Map<string, schedule.Job>();
 
 // --- Core Scheduling and Sending Logic ---
 
-async function scheduleNextStep(campaignContactId: string, sql: postgres.Sql) {
+async function scheduleNextStep(campaignContactId: string, sql: postgres.Sql, delay?: number) {
     console.log(`[Scheduler] Processing next step for campaign contact: ${campaignContactId}`);
     const results = await sql`
         SELECT
@@ -130,6 +130,7 @@ async function scheduleNextStep(campaignContactId: string, sql: postgres.Sql) {
     // This needs careful handling of resumes and restarts. For simplicity now: calculate based on delay from NOW.
     sendTime.setDate(now.getDate() + data.delay_days);
     sendTime.setMinutes(now.getMinutes() + 1)
+    sendTime.setSeconds(now.getSeconds() + (delay ?? 0))
     // TODO: Add logic for specific sending times/days window if needed.
 
     // --- Schedule the Job ---
@@ -571,10 +572,12 @@ const app = new Elysia()
 
             // 3. Schedule the *first* step for each pending contact
             let scheduledCount = 0;
+            let totalDelay = 0
             for (const contact of contactsToSchedule) {
                 try {
-                    // scheduleNextStep handles finding step 1, calculating time, and scheduling
-                    await scheduleNextStep(contact.id, sql); // Pass the transactional sql instance
+                    // Add a random delay between 1-30 seconds for each contact
+                    totalDelay += Math.floor(Math.random() * 30) + 10;
+                    await scheduleNextStep(contact.id, sql, totalDelay); // Pass random delay in seconds
                     scheduledCount++;
                 } catch (error) {
                     console.error(`[API] Error scheduling initial step for contact ${contact.id} in campaign ${id}:`, error);
