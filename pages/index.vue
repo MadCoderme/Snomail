@@ -28,6 +28,7 @@ interface Campaign {
 const campaigns = ref<Campaign[]>([]);
 const selectedCampaignDetails = ref<any>(null); // For detail view
 const campaignContacts = ref<any[]>([]); // For detail view
+const isRetrying = ref(false);
 
 // --- Sequence Data ---
 interface SequenceMeta {
@@ -213,6 +214,27 @@ async function pauseCampaign(campaignId: string) {
         toast.error(`Error pausing campaign: ${error.message}`);
     } finally {
         isLoading.value = false;
+    }
+}
+async function retryFailedContacts() {
+    if (!selectedCampaignDetails.value?.id) return;
+    
+    isRetrying.value = true;
+    try {
+        const response = await fetch(`${backendApiUrl}/api/campaigns/${selectedCampaignDetails.value.id}/retry-failed`, {
+            method: 'POST'
+        });
+        const result = await response.json();
+        
+        if (!response.ok) throw new Error(result.message || 'Failed to retry contacts');
+        
+        toast.success(result.message);
+        // Refresh the campaign details and contacts list
+        await viewCampaignDetails(selectedCampaignDetails.value.id);
+    } catch (error: any) {
+        toast.error(`Error retrying failed contacts: ${error.message}`);
+    } finally {
+        isRetrying.value = false;
     }
 }
 async function viewCampaignDetails(campaignId: string) {
@@ -447,6 +469,12 @@ watch(() => smtpConfig.smtpPort, (newPort) => {
                                 @click="startCampaign(selectedCampaignDetails.id)" :disabled="isLoading">Start</Button>
                             <Button size="sm" variant="secondary" v-if="selectedCampaignDetails.status === 'active'"
                                 @click="pauseCampaign(selectedCampaignDetails.id)" :disabled="isLoading">Pause</Button>
+                                <Button size="sm" variant="secondary"
+                                    v-if="selectedCampaignDetails?.status === 'active'"
+                                    @click="retryFailedContacts"
+                                    :disabled="isRetrying">
+                                    {{ isRetrying ? 'Retrying...' : 'Retry Failed' }}
+                                </Button>
                             <!-- Add other actions: Add Contacts, Edit Settings -->
                         </div>
                     </div>

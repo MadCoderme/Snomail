@@ -645,7 +645,67 @@ const app = new Elysia()
          return { success: true, message: `Campaign paused. Cancelled ${result.cancelledCount} pending emails.` };
     }, { params: t.Object({ id: t.String({ format: 'uuid' }) }) })
     // TODO: Add POST /api/campaigns/:id/resume (similar logic to start, but finding 'paused' contacts)
+    // Add this endpoint before .listen()
+    .post('/api/campaigns/:id/retry-failed', async ({ db, scheduleNextStep, params, set }) => {
+        const { id } = params;
+        console.log(`[API] Retrying failed contacts for campaign: ${id}`);
 
+        // Use transaction to handle retries
+        const result = await db.begin(async sql => {
+            // Verify campaign is active
+            const campaign = await sql`
+                SELECT status FROM campaigns 
+                WHERE id = ${id}
+            `;
+            
+            if (campaign.length === 0) throw new NotFoundError('Campaign not found');
+            if (campaign[0].status !== 'active') {
+                throw new Error('Campaign must be active to retry failed contacts');
+            }
+
+            // Find failed contacts for this campaign
+            const failedContacts = await sql`
+                SELECT id, current_step_number 
+                FROM campaign_contacts
+                WHERE campaign_id = ${id} 
+                AND status = 'failed'
+            `;
+
+            console.log(`[API] Found ${failedContacts.length} failed contacts to retry`);
+            
+            let retriedCount = 0;
+            let totalDelay = 0;
+
+            // Schedule retries with staggered delays
+            for (const contact of failedContacts) {
+                try {
+                    // Add a random delay between 10-40 seconds for each contact
+                    totalDelay += Math.floor(Math.random() * 30) + 10;
+                    
+                    // Reset contact status to pending before scheduling
+                    await sql`
+                        UPDATE campaign_contacts 
+                        SET status = 'pending',
+                            last_error = NULL,
+                            updated_at = NOW()
+                        WHERE id = ${contact.id}
+                    `;
+
+                    await scheduleNextStep(contact.id, sql, totalDelay);
+                    retriedCount++;
+                } catch (error) {
+                    console.error(`[API] Error scheduling retry for contact ${contact.id}:`, error);
+                }
+            }
+
+            return { retriedCount };
+        });
+
+        return { 
+            success: true, 
+            message: `Scheduled retries for ${result.retriedCount} failed contacts.` 
+        };
+    }, { params: t.Object({ id: t.String({ format: 'uuid' }) }) })
 
     .onStart(async ({}) => {
         console.log("🚀 Server started!");

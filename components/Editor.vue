@@ -3,7 +3,8 @@ import { watch } from 'vue';
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
-import { Bold, Italic, Strikethrough, UnderlineIcon, Code, List, ListOrdered, Quote, Undo, Redo, Minus, Heading1, Heading2, Heading3 } from 'lucide-vue-next'
+import Link from '@tiptap/extension-link'
+import { Bold, Italic, Strikethrough, UnderlineIcon, Code, List, ListOrdered, Quote, Undo, Redo, Minus, Heading1, Heading2, Heading3, Link as LinkIcon } from 'lucide-vue-next'
 
 // --- Props ---
 const props = defineProps({
@@ -15,8 +16,8 @@ const props = defineProps({
                     [
                         'bold', 'italic', 'strike', 'underline', 'code',
                         'h1', 'h2', 'h3', 'bulletList', 'orderedList',
-                        'blockquote', 'codeBlock', 'horizontalRule',
-                        'undo', 'redo',
+                        'blockquote', 'codeBlock', 'horizontalRule', 'link',
+                        'undo', 'redo', 
                     ].indexOf(el) === -1
                 ) {
                     return false
@@ -27,8 +28,8 @@ const props = defineProps({
         default: () => [
             'bold', 'italic', 'strike', 'underline', 'code',
             'h1', 'h2', 'h3', 'bulletList', 'orderedList',
-            'blockquote', 'codeBlock', 'horizontalRule',
-            'undo', 'redo',
+            'blockquote', 'codeBlock', 'horizontalRule', 'link',
+            'undo', 'redo', 
         ],
     },
 })
@@ -50,7 +51,13 @@ const editor = useEditor({
                 class: 'list-decimal pl-4'
             }
         },
-    }), Underline],
+    }), Underline,
+    Link.configure({
+        openOnClick: true,
+        HTMLAttributes: {
+            class: 'text-blue-500 underline',
+        },
+    })],
     // Use the onUpdate callback for cleaner event handling
     onUpdate: () => {
         // Ensure editor exists before accessing methods
@@ -62,6 +69,25 @@ const editor = useEditor({
     },
 });
 
+// Add setLink function
+const setLink = () => {
+    const previousUrl = editor.value?.getAttributes('link').href
+    const url = window.prompt('URL', previousUrl)
+
+    // cancelled
+    if (url === null) {
+        return
+    }
+
+    // empty
+    if (url === '') {
+        editor.value?.chain().focus().extendMarkRange('link').unsetLink().run()
+        return
+    }
+
+    // update link
+    editor.value?.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
+}
 </script>
 <template>
     <div class="editor">
@@ -155,6 +181,12 @@ const editor = useEditor({
                     @click="editor.chain().focus().redo().run()">
                     <Redo />
                 </button>
+
+                <button v-if="actionName === 'link'" class="menubar__button"
+                    :class="{ 'is-active': editor.isActive('link') }"
+                    @click="setLink">
+                    <LinkIcon />
+                </button>
             </span>
         </div>
 
@@ -194,5 +226,14 @@ const editor = useEditor({
     outline: none;
     border-color: #66afe9;
     box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075), 0 0 8px rgba(102, 175, 233, 0.6);
+}
+.editor__content :deep(a) {
+    color: #3b82f6;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.editor__content :deep(a:hover) {
+    color: #2563eb;
 }
 </style>
