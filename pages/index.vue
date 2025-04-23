@@ -7,10 +7,11 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select' // Assuming you add this Shadcn component
 import { toast } from 'vue-sonner'
+import { Dialog, DialogScrollContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import SequenceBuilder from '@/components/SequenceBuilder.vue'; // Import the new component
 
 // --- Component State ---
-type View = 'campaignList' | 'createCampaign' | 'createSequence' | 'campaignDetails';
+type View = 'campaignList' | 'createCampaign' | 'createSequence' | 'campaignDetails' | 'sequenceList' | 'sequenceDetails'
 const currentView = ref<View>('campaignList');
 
 // --- Campaign Data ---
@@ -37,6 +38,8 @@ interface SequenceMeta {
     step_count: number;
 }
 const availableSequences = ref<SequenceMeta[]>([]);
+const selectedSequenceDetails = ref<any>(null);
+const isEditingSequence = ref(false);
 
 // --- Create Campaign Form State ---
 const newCampaignName = ref('');
@@ -57,20 +60,26 @@ const smtpConfig = reactive({
 const isLoading = ref(false);
 const isLoadingDetails = ref(false);
 
+const showAddContactsModal = ref(false);
+const newContactsJsonText = ref('');
+const newContactsJsonError = ref<string | null>(null);
+const isAddingContacts = ref(false);
+const parsedNewContacts = ref<any[]>([]);
+
 const backendApiUrl = 'http://localhost:8080';
 
 // Replace the computed property with a standard ref to store the parsed data
-const parsedRecipients : Ref<any[]> = ref([]);
+const parsedRecipients: Ref<any[]> = ref([]);
 
 // Add this watch to update parsedRecipients whenever recipientsJsonText changes
 watch(recipientsJsonText, (newValue) => {
     jsonParseError.value = null; // Reset error on change
-    
+
     if (newValue.trim().length === 0) {
         parsedRecipients.value = [];
         return;
     }
-    
+
     try {
         const parsed = JSON.parse(recipientsJsonText.value);
         if (!Array.isArray(parsed)) throw new Error("Input must be a JSON array.");
@@ -81,6 +90,37 @@ watch(recipientsJsonText, (newValue) => {
     } catch (e) {
         jsonParseError.value = `Invalid JSON: ${e.message}`;
         parsedRecipients.value = [];
+    }
+}, { immediate: true });
+// Add this watch effect with your other watchers
+watch(newContactsJsonText, (newValue) => {
+    newContactsJsonError.value = null;
+
+    if (newValue.trim().length === 0) {
+        parsedNewContacts.value = [];
+        return;
+    }
+
+    try {
+        const parsed = JSON.parse(newValue);
+        if (!Array.isArray(parsed)) throw new Error("Input must be a JSON array.");
+        const validContacts = parsed.filter(item =>
+            typeof item === 'object' &&
+            item !== null &&
+            typeof item.email === 'string' &&
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item.email)
+        );
+
+        if (validContacts.length !== parsed.length) {
+            console.warn("Filtered out invalid contact objects.");
+        }
+        if (validContacts.length === 0 && parsed.length > 0) {
+            throw new Error("No valid contact objects found.");
+        }
+        parsedNewContacts.value = validContacts;
+    } catch (e: any) {
+        newContactsJsonError.value = `Invalid JSON: ${e.message}`;
+        parsedNewContacts.value = [];
     }
 }, { immediate: true });
 
@@ -104,20 +144,23 @@ async function fetchCampaigns() {
     }
 }
 
+// Update the existing fetchSequences method
 async function fetchSequences() {
-    // Fetch sequences for the dropdown
     try {
         const response = await fetch(`${backendApiUrl}/api/sequences`);
         if (!response.ok) throw new Error('Failed to fetch sequences');
         const result = await response.json();
         if (result.success) {
-            availableSequences.value = result.data;
+            availableSequences.value = result.data.map((seq: any) => ({
+                ...seq,
+                created_at: new Date(seq.created_at).toISOString()
+            }));
         } else {
             throw new Error(result.message || 'Failed to fetch sequences');
         }
     } catch (error: any) {
         toast.error(`Error fetching sequences: ${error.message}`);
-        availableSequences.value = []; // Clear on error
+        availableSequences.value = [];
     }
 }
 
@@ -218,16 +261,16 @@ async function pauseCampaign(campaignId: string) {
 }
 async function retryFailedContacts() {
     if (!selectedCampaignDetails.value?.id) return;
-    
+
     isRetrying.value = true;
     try {
         const response = await fetch(`${backendApiUrl}/api/campaigns/${selectedCampaignDetails.value.id}/retry-failed`, {
             method: 'POST'
         });
         const result = await response.json();
-        
+
         if (!response.ok) throw new Error(result.message || 'Failed to retry contacts');
-        
+
         toast.success(result.message);
         // Refresh the campaign details and contacts list
         await viewCampaignDetails(selectedCampaignDetails.value.id);
@@ -264,7 +307,92 @@ async function viewCampaignDetails(campaignId: string) {
         isLoadingDetails.value = false;
     }
 }
+// Add this method with your other methods
+async function addContactsToCampaign() {
+    if (!selectedCampaignDetails.value?.id) return;
+    if (!parsedNewContacts.value.length) {
+        toast.error("Please add valid contacts first.");
+        return;
+    }
 
+    isAddingContacts.value = true;
+    try {
+        const response = await fetch(`${backendApiUrl}/api/campaigns/${selectedCampaignDetails.value.id}/contacts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contacts: parsedNewContacts.value })
+        });
+
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'Failed to add contacts');
+
+        toast.success(result.message);
+        if (result.errors?.length) {
+            toast.warning(`Some contacts had issues: ${result.errors.join(', ')}`);
+        }
+
+        // Reset form and close modal
+        newContactsJsonText.value = '';
+        showAddContactsModal.value = false;
+
+        // Refresh campaign details
+        await viewCampaignDetails(selectedCampaignDetails.value.id);
+    } catch (error: any) {
+        toast.error(`Error adding contacts: ${error.message}`);
+    } finally {
+        isAddingContacts.value = false;
+    }
+}
+
+// Add to the methods section
+async function viewSequenceDetails(sequenceId: string) {
+    isLoading.value = true;
+    try {
+        const response = await fetch(`${backendApiUrl}/api/sequences/${sequenceId}`);
+        if (!response.ok) throw new Error('Failed to fetch sequence details');
+        const result = await response.json();
+        if (!result.success) throw new Error(result.message);
+
+        selectedSequenceDetails.value = result.data;
+        currentView.value = 'sequenceDetails';
+    } catch (error: any) {
+        toast.error(`Error loading sequence details: ${error.message}`);
+    } finally {
+        isLoading.value = false;
+    }
+}
+
+async function toggleSequenceEdit() {
+    if (!selectedSequenceDetails.value) return;
+
+    if (isEditingSequence.value) {
+        // Save changes
+        try {
+            const response = await fetch(`${backendApiUrl}/api/sequences/${selectedSequenceDetails.value.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: selectedSequenceDetails.value.name,
+                    steps: selectedSequenceDetails.value.steps
+                })
+            });
+
+            if (!response.ok) throw new Error('Failed to update sequence');
+            const result = await response.json();
+
+            toast.success('Sequence updated successfully');
+            // Refresh sequences list in background
+            fetchSequences();
+        } catch (error: any) {
+            toast.error(`Failed to update sequence: ${error.message}`);
+            // Optionally revert changes or reload original data
+            await viewSequenceDetails(selectedSequenceDetails.value.id);
+            return;
+        }
+    }
+
+    isEditingSequence.value = !isEditingSequence.value;
+}
 
 function resetCreateCampaignForm() {
     newCampaignName.value = '';
@@ -299,6 +427,8 @@ watch(() => smtpConfig.smtpPort, (newPort) => {
         <div class="flex gap-2 mb-6 border-b pb-2">
             <Button :variant="currentView === 'campaignList' ? 'default' : 'outline'"
                 @click="currentView = 'campaignList'; fetchCampaigns()">Campaigns</Button>
+            <Button :variant="currentView === 'sequenceList' ? 'default' : 'outline'"
+                @click="currentView = 'sequenceList'; fetchSequences()">Sequences</Button>
             <Button :variant="currentView === 'createCampaign' ? 'default' : 'outline'"
                 @click="currentView = 'createCampaign'; fetchSequences()">Create Campaign</Button>
             <Button :variant="currentView === 'createSequence' ? 'default' : 'outline'"
@@ -323,12 +453,12 @@ watch(() => smtpConfig.smtpPort, (newPort) => {
                                     <CardTitle class="text-lg">{{ campaign.name }}</CardTitle>
                                     <CardDescription>Sequence: {{ campaign.sequence_name }} | Status: <span
                                             :class="{ 'text-green-600': campaign.status === 'active', 'text-yellow-600': campaign.status === 'paused', 'text-blue-600': campaign.status === 'completed' }">{{
-                                            formatStatus(campaign.status) }}</span></CardDescription>
+                                                formatStatus(campaign.status) }}</span></CardDescription>
                                     <p class="text-xs text-muted-foreground mt-1">Created: {{ new
                                         Date(campaign.created_at).toLocaleDateString() }}</p>
                                     <p class="text-xs text-muted-foreground">Contacts: {{ campaign.total_contacts ??
                                         'N/A' }} (Completed: {{ campaign.completed_contacts ?? 0 }}, Failed: {{
-                                        campaign.failed_contacts ?? 0 }})</p>
+                                            campaign.failed_contacts ?? 0 }})</p>
                                 </div>
                                 <div class="flex gap-2 items-center flex-shrink-0">
                                     <Button size="sm" variant="outline"
@@ -429,7 +559,7 @@ watch(() => smtpConfig.smtpPort, (newPort) => {
                             <p v-if="jsonParseError" class="text-xs text-red-600 mt-1">{{ jsonParseError }}</p>
                             <p v-else class="text-xs text-muted-foreground mt-1">
                                 Paste JSON array. Each object needs "email". Other keys are placeholders. Found {{
-                                parsedRecipients.length }} valid.
+                                    parsedRecipients.length }} valid.
                             </p>
                         </div>
                     </fieldset>
@@ -469,12 +599,14 @@ watch(() => smtpConfig.smtpPort, (newPort) => {
                                 @click="startCampaign(selectedCampaignDetails.id)" :disabled="isLoading">Start</Button>
                             <Button size="sm" variant="secondary" v-if="selectedCampaignDetails.status === 'active'"
                                 @click="pauseCampaign(selectedCampaignDetails.id)" :disabled="isLoading">Pause</Button>
-                                <Button size="sm" variant="secondary"
-                                    v-if="selectedCampaignDetails?.status === 'active'"
-                                    @click="retryFailedContacts"
-                                    :disabled="isRetrying">
-                                    {{ isRetrying ? 'Retrying...' : 'Retry Failed' }}
-                                </Button>
+                            <Button size="sm" variant="secondary" v-if="selectedCampaignDetails?.status === 'active'"
+                                @click="retryFailedContacts" :disabled="isRetrying">
+                                {{ isRetrying ? 'Retrying...' : 'Retry Failed' }}
+                            </Button>
+                            <Button size="sm" variant="secondary" v-if="selectedCampaignDetails?.status === 'active'"
+                                @click="showAddContactsModal = true">
+                                Add Contacts
+                            </Button>
                             <!-- Add other actions: Add Contacts, Edit Settings -->
                         </div>
                     </div>
@@ -512,6 +644,128 @@ watch(() => smtpConfig.smtpPort, (newPort) => {
                 </CardContent>
             </Card>
         </div>
+        <!-- Add after other view components in the template -->
+        <!-- Sequence List View -->
+        <div v-if="currentView === 'sequenceList'">
+            <Card>
+                <CardHeader>
+                    <CardTitle>Email Sequences</CardTitle>
+                    <CardDescription>Manage your email sequence templates.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div v-if="isLoading" class="text-center p-4">Loading sequences...</div>
+                    <div v-else-if="availableSequences.length === 0" class="text-center p-4 text-muted-foreground">
+                        No sequences created yet.
+                    </div>
+                    <div v-else class="space-y-4">
+                        <Card v-for="sequence in availableSequences" :key="sequence.id">
+                            <CardHeader class="flex flex-row justify-between items-start">
+                                <div>
+                                    <CardTitle class="text-lg">{{ sequence.name }}</CardTitle>
+                                    <CardDescription>
+                                        {{ sequence.step_count }} steps
+                                        <span class="text-xs text-muted-foreground ml-2">
+                                            Created: {{ new Date(sequence.created_at).toLocaleDateString() }}
+                                        </span>
+                                    </CardDescription>
+                                </div>
+                                <div class="flex gap-2">
+                                    <Button size="sm" variant="outline" @click="viewSequenceDetails(sequence.id)">
+                                        View/Edit
+                                    </Button>
+                                </div>
+                            </CardHeader>
+                        </Card>
+                    </div>
+                </CardContent>
+            </Card>
+        </div>
 
+        <!-- Sequence Details/Edit View -->
+        <div v-if="currentView === 'sequenceDetails' && selectedSequenceDetails">
+            <Card>
+                <CardHeader>
+                    <Button variant="outline" size="sm" @click="currentView = 'sequenceList'" class="mb-4">
+                        ← Back to Sequences
+                    </Button>
+                    <CardTitle class="flex justify-between items-center">
+                        <span v-if="!isEditingSequence">{{ selectedSequenceDetails.name }}</span>
+                        <Input v-else v-model="selectedSequenceDetails.name" class="max-w-md" />
+                        <Button size="sm" @click="toggleSequenceEdit">
+                            {{ isEditingSequence ? 'Save Changes' : 'Edit Sequence' }}
+                        </Button>
+                    </CardTitle>
+                    <CardDescription>
+                        {{ selectedSequenceDetails.steps?.length || 0 }} steps
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div class="space-y-6">
+                        <div v-for="(step, index) in selectedSequenceDetails.steps" :key="index"
+                            class="border rounded-lg p-4 space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="font-semibold">Step {{ step.step_number }}</h3>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm text-muted-foreground">
+                                        Delay: {{ step.delay_days }} days
+                                    </span>
+                                    <Input v-if="isEditingSequence" v-model.number="step.delay_days" type="number"
+                                        class="w-20" min="0" />
+                                </div>
+                            </div>
+
+                            <div class="space-y-2">
+                                <Label>Subject</Label>
+                                <Input v-if="isEditingSequence" v-model="step.subject_template"
+                                    placeholder="Email subject with {placeholders}" />
+                                <div v-else class="text-sm border rounded p-2">
+                                    {{ step.subject_template }}
+                                </div>
+                            </div>
+
+                            <div class="space-y-2">
+                                <Label>Body Template</Label>
+                                <Textarea v-if="isEditingSequence" v-model="step.body_template"
+                                    placeholder="Email body with {placeholders}" rows="6" />
+                                <div v-else class="text-sm border rounded p-2 whitespace-pre-wrap">
+                                    {{ step.body_template }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+        </div>
+        <Dialog :open="showAddContactsModal" @update:open="showAddContactsModal = false">
+            <DialogScrollContent class="sm:max-w-[600px]">
+                <DialogHeader>
+                    <DialogTitle>Add Contacts to Campaign</DialogTitle>
+                    <DialogDescription>
+                        Add new contacts to "{{ selectedCampaignDetails?.name }}". Emails will be scheduled
+                        automatically.
+                    </DialogDescription>
+                </DialogHeader>
+                <div class="space-y-4 py-4">
+                    <div class="space-y-2">
+                        <Label for="newContactsJson">Contact Data (JSON Array)</Label>
+                        <Textarea id="newContactsJson" v-model="newContactsJsonText"
+                            placeholder='[{"email":"test@example.com", "firstName":"John"}, ...]' rows="6"
+                            :class="{ 'border-red-500': newContactsJsonError }" />
+                        <p v-if="newContactsJsonError" class="text-xs text-red-600">
+                            {{ newContactsJsonError }}
+                        </p>
+                        <p v-else class="text-xs text-muted-foreground">
+                            Found {{ parsedNewContacts.length }} valid contacts to add.
+                        </p>
+                    </div>
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" @click="showAddContactsModal = false">Cancel</Button>
+                    <Button @click="addContactsToCampaign" :disabled="isAddingContacts || !parsedNewContacts.length">
+                        {{ isAddingContacts ? 'Adding...' : 'Add Contacts' }}
+                    </Button>
+                </DialogFooter>
+            </DialogScrollContent>
+        </Dialog>
     </div>
 </template>
