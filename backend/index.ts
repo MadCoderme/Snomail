@@ -895,7 +895,75 @@ const app = new Elysia()
             )
         })
     })
-
+    .post('/api/test-email', async ({ body }) => {
+        const validation = z.object({
+            fromEmail: z.string().email(),
+            toEmail: z.string().email(),
+            subject: z.string(),
+            body: z.string(),
+            smtpConfig: smtpConfigSchema
+        }).safeParse(body);
+    
+        if (!validation.success) {
+            return {
+                success: false,
+                message: 'Validation failed',
+                errors: validation.error.flatten().fieldErrors
+            };
+        }
+    
+        const { fromEmail, toEmail, subject, body : emailBody, smtpConfig } = validation.data;
+    
+        try {
+            const transporter = nodemailer.createTransport({
+                host: smtpConfig.smtpHost,
+                port: smtpConfig.smtpPort,
+                secure: smtpConfig.smtpSecure,
+                auth: {
+                    user: smtpConfig.smtpUser,
+                    pass: smtpConfig.smtpPass
+                },
+                tls: { rejectUnauthorized: false }
+            });
+    
+            // Verify connection
+            await transporter.verify();
+    
+            // Send test email
+            const info = await transporter.sendMail({
+                from: fromEmail,
+                to: toEmail,
+                subject: subject,
+                html: emailBody
+            });
+    
+            return {
+                success: true,
+                message: 'Test email sent successfully',
+                data: { messageId: info.messageId }
+            };
+        } catch (error: any) {
+            console.error('Test email error:', error);
+            return {
+                success: false,
+                message: `Failed to send test email: ${error.message}`
+            };
+        }
+    }, {
+        body: t.Object({
+            fromEmail: t.String({ format: 'email' }),
+            toEmail: t.String({ format: 'email' }),
+            subject: t.String(),
+            body: t.String(),
+            smtpConfig: t.Object({
+                smtpHost: t.String(),
+                smtpPort: t.Number(),
+                smtpUser: t.String(),
+                smtpPass: t.String(),
+                smtpSecure: t.Boolean()
+            })
+        })
+    })
     .onStart(async ({}) => {
         console.log("🚀 Server started!");
         await reschedulePendingJobs(sql);

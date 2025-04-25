@@ -13,4 +13,8 @@ export default defineNuxtConfig({
   },
 
   modules: ['shadcn-nuxt'],
+
+  app: {
+    pageTransition: { name: 'page', mode: 'out-in' }
+  }
 })
